@@ -3,6 +3,8 @@ package subscriptions
 import (
 	"context"
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	"go.uber.org/zap"
 	"net/http"
 	"time"
@@ -17,11 +19,15 @@ type Server struct {
 func NewServer(logger *zap.Logger) *Server {
 	router := gin.New()
 
+	//  swagger роутинг
+	url := ginSwagger.URL("/swagger/doc.json")
+	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, url))
+
 	server := &Server{
 		logger: logger,
 		router: router,
 		httpServer: &http.Server{
-			Addr:         ":8080", // Будет переопределено в Start()
+			Addr:         ":8080",
 			Handler:      router,
 			ReadTimeout:  5 * time.Second,
 			WriteTimeout: 10 * time.Second,
@@ -29,7 +35,6 @@ func NewServer(logger *zap.Logger) *Server {
 		},
 	}
 
-	// Устанавливаем middleware при создании
 	server.setupMiddleware()
 	return server
 }
@@ -52,7 +57,7 @@ func (s *Server) GetRouter() *gin.Engine {
 func (s *Server) setupMiddleware() {
 	s.router.Use(
 		gin.Recovery(),
-		s.loggingMiddleware(), // Теперь метод доступен
+		s.loggingMiddleware(),
 	)
 }
 

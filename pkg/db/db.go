@@ -9,6 +9,7 @@ import (
 
 func NewPGXPool(ctx context.Context, connString string, logger *zap.Logger) (*pgxpool.Pool, error) {
 
+	// конфигурация пула
 	config, err := pgxpool.ParseConfig(connString)
 	if err != nil {
 		logger.Error("Ошибка парсинга строки подключения", zap.Error(err))
@@ -25,12 +26,14 @@ func NewPGXPool(ctx context.Context, connString string, logger *zap.Logger) (*pg
 		zap.Int("min_conns", int(config.MinConns)),
 	)
 
+	// создание пула соединений
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		logger.Error("Ошибка создания пула соединений", zap.Error(err))
 		return nil, err
 	}
 
+	// Проверка подключения
 	if err := pool.Ping(ctx); err != nil {
 		logger.Error("Проверка подключения не пройдена", zap.Error(err))
 		return nil, err
