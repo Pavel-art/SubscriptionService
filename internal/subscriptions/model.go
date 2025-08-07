@@ -2,7 +2,6 @@ package subscriptions
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 )
@@ -25,7 +24,13 @@ type Subscription struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
-func NewSubscription(serviceName string, price int, userID string, startDate time.Time, endDate *time.Time) (*Subscription, error) {
+func NewSubscription(
+	serviceName string,
+	price int,
+	userID string,
+	startDate time.Time,
+	endDate *time.Time,
+) (*Subscription, error) {
 	sub := &Subscription{
 		ServiceName: strings.TrimSpace(serviceName),
 		Price:       price,
@@ -37,13 +42,15 @@ func NewSubscription(serviceName string, price int, userID string, startDate tim
 	}
 
 	if err := sub.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid subscription: %w", err)
+		return nil, err
 	}
 
 	return sub, nil
 }
 
 func (s *Subscription) Validate() error {
+
+	s.ServiceName = strings.TrimSpace(s.ServiceName)
 	if len(s.ServiceName) < 2 || len(s.ServiceName) > 100 {
 		return ErrInvalidServiceName
 	}
@@ -52,7 +59,8 @@ func (s *Subscription) Validate() error {
 		return ErrInvalidPrice
 	}
 
-	if len(s.UserID) != 36 { // UUID v4 length
+	s.UserID = strings.TrimSpace(s.UserID)
+	if len(s.UserID) != 36 {
 		return ErrInvalidUserID
 	}
 
@@ -61,71 +69,4 @@ func (s *Subscription) Validate() error {
 	}
 
 	return nil
-}
-
-// IsActive проверяет активна ли подписка на указанную дату
-func (s *Subscription) IsActive(at time.Time) bool {
-	if at.Before(s.StartDate) {
-		return false
-	}
-
-	if s.EndDate == nil {
-		return true
-	}
-
-	return at.Before(*s.EndDate)
-}
-
-// CalculateCostForPeriod рассчитывает стоимость за период
-func (s *Subscription) CalculateCostForPeriod(from, to time.Time) int {
-	if !s.IsActiveDuringPeriod(from, to) {
-		return 0
-	}
-
-	months := monthsBetween(
-		maxTime(from, s.StartDate),
-		minTime(to, s.getEndDateOrMax()),
-	)
-
-	return s.Price * months
-}
-
-// IsActiveDuringPeriod проверяет активна ли подписка в течение всего периода
-func (s *Subscription) IsActiveDuringPeriod(from, to time.Time) bool {
-	if to.Before(from) {
-		return false
-	}
-
-	return !from.Before(s.StartDate) &&
-		(s.EndDate == nil || !to.After(*s.EndDate))
-}
-
-func (s *Subscription) getEndDateOrMax() time.Time {
-	if s.EndDate == nil {
-		return time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
-	}
-	return *s.EndDate
-}
-
-func monthsBetween(from, to time.Time) int {
-	months := 0
-	for from.Before(to) {
-		from = from.AddDate(0, 1, 0)
-		months++
-	}
-	return months
-}
-
-func maxTime(a, b time.Time) time.Time {
-	if a.After(b) {
-		return a
-	}
-	return b
-}
-
-func minTime(a, b time.Time) time.Time {
-	if a.Before(b) {
-		return a
-	}
-	return b
 }

@@ -1,10 +1,11 @@
 package subscriptions
 
 import (
-	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 	"net/http"
 	"time"
+
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 type SubscriptionHandler struct {
@@ -67,9 +68,16 @@ func (h *SubscriptionHandler) Create(c *gin.Context) {
 		endDatePtr = &endDate
 	}
 
-	sub, err := NewSubscription(req.ServiceName, req.Price, req.UserID, startDate, endDatePtr)
+	// Используем NewSubscription для валидации
+	sub, err := NewSubscription(
+		req.ServiceName,
+		req.Price,
+		req.UserID,
+		startDate,
+		endDatePtr,
+	)
 	if err != nil {
-		h.logger.Error("invalid subscription", zap.Error(err))
+		h.logger.Error("invalid subscription data", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -81,29 +89,6 @@ func (h *SubscriptionHandler) Create(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, sub)
-}
-
-// Get godoc
-// @Summary Get subscription by ID
-// @Tags Subscriptions
-// @Produce json
-// @Param id path string true "Subscription ID"
-// @Success 200 {object} Subscription
-// @Failure 404,500 {object} gin.H
-// @Router /subscriptions/{id} [get]
-func (h *SubscriptionHandler) Get(c *gin.Context) {
-	id := c.Param("id")
-	sub, err := h.repo.GetByID(c.Request.Context(), id)
-	if err != nil {
-		h.logger.Error("failed to get subscription", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get subscription"})
-		return
-	}
-	if sub == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "subscription not found"})
-		return
-	}
-	c.JSON(http.StatusOK, sub)
 }
 
 // Update godoc
@@ -132,6 +117,7 @@ func (h *SubscriptionHandler) Update(c *gin.Context) {
 		return
 	}
 
+	// Обработка опционального EndDate
 	var endDatePtr *time.Time
 	if req.EndDate != "" {
 		endDate, err := time.Parse("01-2006", req.EndDate)
@@ -142,13 +128,14 @@ func (h *SubscriptionHandler) Update(c *gin.Context) {
 		endDatePtr = &endDate
 	}
 
-	sub, err := NewSubscription(req.ServiceName, req.Price, req.UserID, startDate, endDatePtr)
-	if err != nil {
-		h.logger.Error("invalid subscription update data", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+	sub := &Subscription{
+		ID:          id,
+		ServiceName: req.ServiceName,
+		Price:       req.Price,
+		UserID:      req.UserID,
+		StartDate:   startDate,
+		EndDate:     endDatePtr,
 	}
-	sub.ID = id
 
 	if err := h.repo.Update(c.Request.Context(), sub); err != nil {
 		h.logger.Error("failed to update subscription", zap.Error(err))
@@ -156,6 +143,29 @@ func (h *SubscriptionHandler) Update(c *gin.Context) {
 		return
 	}
 
+	c.JSON(http.StatusOK, sub)
+}
+
+// Get godoc
+// @Summary Get subscription by ID
+// @Tags Subscriptions
+// @Produce json
+// @Param id path string true "Subscription ID"
+// @Success 200 {object} Subscription
+// @Failure 404,500 {object} gin.H
+// @Router /subscriptions/{id} [get]
+func (h *SubscriptionHandler) Get(c *gin.Context) {
+	id := c.Param("id")
+	sub, err := h.repo.GetByID(c.Request.Context(), id)
+	if err != nil {
+		h.logger.Error("failed to get subscription", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get subscription"})
+		return
+	}
+	if sub == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "subscription not found"})
+		return
+	}
 	c.JSON(http.StatusOK, sub)
 }
 

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
+	"strings"
+	"time"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
@@ -19,8 +21,6 @@ type ISubscriptionRepository interface {
 	CalculateMonthlyCost(ctx context.Context, filters map[string]interface{}) (int, error)
 }
 
-var _ ISubscriptionRepository = (*SubscriptionRepository)(nil)
-
 type SubscriptionRepository struct {
 	db     *pgxpool.Pool
 	logger *zap.Logger
@@ -30,30 +30,18 @@ func NewSubscriptionRepository(db *pgxpool.Pool, logger *zap.Logger) *Subscripti
 	return &SubscriptionRepository{db: db, logger: logger}
 }
 
-func (s SubscriptionRepository) Create(ctx context.Context, sub *Subscription) error {
-
-	if sub.ID == "" {
-		sub.ID = uuid.New().String()
-	}
-
+func (s *SubscriptionRepository) Create(ctx context.Context, sub *Subscription) error {
 	query := `
-        INSERT INTO subscriptions (id, service_name, price, user_id, start_date, end_date)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id`
+		INSERT INTO subscriptions (service_name, price, user_id, start_date, end_date)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id`
 
-	// Проверяем контекст перед выполнением запроса
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("context error before query: %w", err)
-	}
-
-	// Выполняем запрос с учетом возможного NULL для end_date
-	var endDate interface{} = nil
+	var endDate any = nil
 	if sub.EndDate != nil {
 		endDate = *sub.EndDate
 	}
 
 	err := s.db.QueryRow(ctx, query,
-		sub.ID,
 		sub.ServiceName,
 		sub.Price,
 		sub.UserID,
@@ -62,57 +50,55 @@ func (s SubscriptionRepository) Create(ctx context.Context, sub *Subscription) e
 	).Scan(&sub.ID)
 
 	if err != nil {
-		// Логгируем ошибку, если логгер доступен
-		if s.logger != nil {
-			s.logger.Error("failed to create subscription",
-				zap.Error(err),
-				zap.String("service", sub.ServiceName),
-				zap.String("user", sub.UserID))
-		}
+		s.logger.Error("failed to create subscription",
+			zap.Error(err),
+			zap.String("service", sub.ServiceName),
+			zap.String("user", sub.UserID))
 		return fmt.Errorf("failed to create subscription: %w", err)
 	}
 
 	return nil
 }
 
-func (s SubscriptionRepository) GetByID(ctx context.Context, id string) (*Subscription, error) {
-	query := `SELECT id, service_name, price, user_id, start_date, end_date FROM subscriptions WHERE id = $1`
+func (s *SubscriptionRepository) GetByID(ctx context.Context, id string) (*Subscription, error) {
+	query := `
+		SELECT id, service_name, price, user_id, start_date, end_date
+		FROM subscriptions 
+		WHERE id = $1`
 
-	s.logger.Debug("Executing GetByID query",
-		zap.String("query", query),
-		zap.String("id", id))
-
-	row := s.db.QueryRow(ctx, query, id)
 	sub := &Subscription{}
+	var endDate *time.Time
 
-	err := row.Scan(&sub.ID, &sub.ServiceName, &sub.Price, &sub.UserID, &sub.StartDate, &sub.EndDate)
+	err := s.db.QueryRow(ctx, query, id).Scan(
+		&sub.ID,
+		&sub.ServiceName,
+		&sub.Price,
+		&sub.UserID,
+		&sub.StartDate,
+		&endDate,
+	)
+
+	sub.EndDate = endDate
+
 	if err != nil {
-		s.logger.Error("Failed to get subscription by ID",
-			zap.String("id", id),
-			zap.Error(err))
-
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("subscription not found")
 		}
-		return nil, fmt.Errorf("database error: %w", err)
+		s.logger.Error("failed to get subscription",
+			zap.Error(err),
+			zap.String("id", id))
+		return nil, fmt.Errorf("failed to get subscription: %w", err)
 	}
-
-	s.logger.Debug("Successfully retrieved subscription",
-		zap.String("id", sub.ID),
-		zap.String("service", sub.ServiceName))
 
 	return sub, nil
 }
 
-func (s SubscriptionRepository) Update(ctx context.Context, sub *Subscription) error {
+func (s *SubscriptionRepository) Update(ctx context.Context, sub *Subscription) error {
 	query := `
-        UPDATE subscriptions 
-        SET service_name = $1, price = $2, user_id = $3, start_date = $4, end_date = $5
-        WHERE id = $6`
-
-	s.logger.Debug("Executing Update query",
-		zap.String("query", query),
-		zap.Any("subscription", sub))
+		UPDATE subscriptions 
+		SET service_name = $1, price = $2, user_id = $3, 
+			start_date = $4, end_date = $5
+		WHERE id = $6`
 
 	var endDate interface{} = nil
 	if sub.EndDate != nil {
@@ -125,139 +111,113 @@ func (s SubscriptionRepository) Update(ctx context.Context, sub *Subscription) e
 		sub.UserID,
 		sub.StartDate,
 		endDate,
-		sub.ID)
+		sub.ID,
+	)
 
 	if err != nil {
-		s.logger.Error("Failed to update subscription",
-			zap.String("id", sub.ID),
-			zap.Error(err))
-		return fmt.Errorf("database error: %w", err)
+		s.logger.Error("failed to update subscription",
+			zap.Error(err),
+			zap.String("id", sub.ID))
+		return fmt.Errorf("failed to update subscription: %w", err)
 	}
 
 	if result.RowsAffected() == 0 {
-		s.logger.Warn("No rows affected when updating subscription",
-			zap.String("id", sub.ID))
 		return fmt.Errorf("subscription not found")
 	}
-
-	s.logger.Info("Successfully updated subscription",
-		zap.String("id", sub.ID))
 
 	return nil
 }
 
-func (s SubscriptionRepository) Delete(ctx context.Context, id string) error {
+func (s *SubscriptionRepository) Delete(ctx context.Context, id string) error {
 	query := `DELETE FROM subscriptions WHERE id = $1`
-
-	s.logger.Debug("Executing Delete query",
-		zap.String("query", query),
-		zap.String("id", id))
 
 	result, err := s.db.Exec(ctx, query, id)
 	if err != nil {
-		s.logger.Error("Failed to delete subscription",
-			zap.String("id", id),
-			zap.Error(err))
-		return fmt.Errorf("database error: %w", err)
+		s.logger.Error("failed to delete subscription",
+			zap.Error(err),
+			zap.String("id", id))
+		return fmt.Errorf("failed to delete subscription: %w", err)
 	}
 
 	if result.RowsAffected() == 0 {
-		s.logger.Warn("No subscription found to delete",
-			zap.String("id", id))
 		return fmt.Errorf("subscription not found")
 	}
-
-	s.logger.Info("Successfully deleted subscription",
-		zap.String("id", id))
 
 	return nil
 }
 
-func (s SubscriptionRepository) List(ctx context.Context, filters map[string]interface{}) ([]*Subscription, error) {
-	query := `SELECT id, service_name, price, user_id, start_date, end_date FROM subscriptions`
-	var args []interface{}
-	conditions := ""
-	i := 1
+func (s *SubscriptionRepository) List(ctx context.Context, filters map[string]interface{}) ([]*Subscription, error) {
+	baseQuery := `
+		SELECT id, service_name, price, user_id, start_date, end_date
+		FROM subscriptions`
 
-	for k, v := range filters {
-		if conditions == "" {
-			conditions = " WHERE "
-		} else {
-			conditions += " AND "
-		}
-		conditions += fmt.Sprintf("%s = $%d", k, i)
-		args = append(args, v)
-		i++
+	var conditions []string
+	var args []interface{}
+
+	for field, value := range filters {
+		conditions = append(conditions, fmt.Sprintf("%s = $%d", field, len(args)+1))
+		args = append(args, value)
 	}
 
-	fullQuery := query + conditions
+	if len(conditions) > 0 {
+		baseQuery += " WHERE " + strings.Join(conditions, " AND ")
+	}
 
-	s.logger.Debug("Executing List query",
-		zap.String("query", fullQuery),
-		zap.Any("filters", filters))
-
-	rows, err := s.db.Query(ctx, fullQuery, args...)
+	rows, err := s.db.Query(ctx, baseQuery, args...)
 	if err != nil {
-		s.logger.Error("Failed to list subscriptions",
-			zap.Any("filters", filters),
+		s.logger.Error("failed to list subscriptions",
 			zap.Error(err))
-		return nil, fmt.Errorf("database error: %w", err)
+		return nil, fmt.Errorf("failed to list subscriptions: %w", err)
 	}
 	defer rows.Close()
 
 	var subs []*Subscription
 	for rows.Next() {
 		var sub Subscription
-		err := rows.Scan(&sub.ID, &sub.ServiceName, &sub.Price, &sub.UserID, &sub.StartDate, &sub.EndDate)
-		if err != nil {
-			s.logger.Error("Failed to scan subscription row",
+		var endDate *time.Time
+
+		if err := rows.Scan(
+			&sub.ID,
+			&sub.ServiceName,
+			&sub.Price,
+			&sub.UserID,
+			&sub.StartDate,
+			&endDate,
+		); err != nil {
+			s.logger.Error("failed to scan subscription",
 				zap.Error(err))
-			return nil, fmt.Errorf("database scan error: %w", err)
+			continue
 		}
+
+		sub.EndDate = endDate
 		subs = append(subs, &sub)
 	}
-
-	s.logger.Debug("Successfully listed subscriptions",
-		zap.Int("count", len(subs)))
 
 	return subs, nil
 }
 
-func (s SubscriptionRepository) CalculateMonthlyCost(ctx context.Context, filters map[string]interface{}) (int, error) {
-	query := `SELECT SUM(price) FROM subscriptions`
-	var args []interface{}
-	conditions := ""
-	i := 1
+func (s *SubscriptionRepository) CalculateMonthlyCost(ctx context.Context, filters map[string]interface{}) (int, error) {
+	baseQuery := `SELECT COALESCE(SUM(price), 0) FROM subscriptions`
 
-	for k, v := range filters {
-		if conditions == "" {
-			conditions = " WHERE "
-		} else {
-			conditions += " AND "
-		}
-		conditions += fmt.Sprintf("%s = $%d", k, i)
-		args = append(args, v)
-		i++
+	var conditions []string
+	var args []any
+
+	for field, value := range filters {
+		conditions = append(conditions, fmt.Sprintf("%s = $%d", field, len(args)+1))
+		args = append(args, value)
 	}
 
-	fullQuery := query + conditions
+	if len(conditions) > 0 {
+		baseQuery += " WHERE " + strings.Join(conditions, " AND ")
+	}
 
-	s.logger.Debug("Executing CalculateMonthlyCost query",
-		zap.String("query", fullQuery),
-		zap.Any("filters", filters))
-
-	var sum int
-	err := s.db.QueryRow(ctx, fullQuery, args...).Scan(&sum)
+	var total int
+	err := s.db.QueryRow(ctx, baseQuery, args...).Scan(&total)
 	if err != nil {
-		s.logger.Error("Failed to calculate monthly cost",
-			zap.Any("filters", filters),
+		s.logger.Error("failed to calculate monthly cost",
 			zap.Error(err))
-		return 0, fmt.Errorf("database error: %w", err)
+		return 0, fmt.Errorf("failed to calculate monthly cost: %w", err)
 	}
 
-	s.logger.Info("Calculated monthly cost",
-		zap.Int("total", sum),
-		zap.Any("filters", filters))
-
-	return sum, nil
+	return total, nil
 }
